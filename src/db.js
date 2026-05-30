@@ -43,92 +43,101 @@ export async function loadRates(url) {
 }
 
 /*
-CostsDB constructor - represents a named database instance.
+CostsDB factory function - represents a named database instance.
 Stores all cost items in localStorage under a versioned key.
 */
 function CostsDB(name, version) {
-  this.storageKey = `${name}_v${version}_costs`;
+  const storageKey = `${name}_v${version}_costs`;
+
+  /* Loads all cost items from localStorage */
+  function loadItems() {
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return [];
+    return JSON.parse(raw);
+  }
+
+  /* Saves all cost items to localStorage */
+  function saveItems(items) {
+    localStorage.setItem(storageKey, JSON.stringify(items));
+  }
+
+  /*
+  Adds a new cost item to the database with today's date.
+  Returns the saved item's core fields.
+  */
+  function addCost(cost) {
+    const now = new Date();
+    // Auto-generate date and unique id for the new item
+    const newItem = {
+      ...cost,
+      date: { day: now.getDate(), month: now.getMonth() + 1, year: now.getFullYear() },
+      id: Date.now()
+    };
+    const items = loadItems();
+    items.push(newItem);
+    saveItems(items);
+    return { sum: newItem.sum, currency: newItem.currency, category: newItem.category, description: newItem.description };
+  }
+
+  /*
+  Returns a monthly report in the requested currency.
+  Filters items by year and month, converts each to the target currency,
+  and calculates the total sum.
+  */
+  function getReport(currency, year, month) {
+    const now = new Date();
+    // Default to current month and year if not provided
+    const targetYear = year !== undefined ? year : now.getFullYear();
+    const targetMonth = month !== undefined ? month : now.getMonth() + 1;
+    const all = loadItems();
+    const filtered = all.filter(i => i.date.year === targetYear && i.date.month === targetMonth);
+    let totalSum = 0;
+    filtered.forEach(i => { totalSum += convertAmount(i.sum, i.currency, currency); });
+    return {
+      year: targetYear,
+      month: targetMonth,
+      costs: filtered.map(i => ({ sum: i.sum, currency: i.currency, category: i.category, description: i.description, date: { day: i.date.day } })),
+      total: { currency, sum: Math.round(totalSum * 100) / 100 }
+    };
+  }
+
+  /*
+  Returns an array of 12 monthly totals for the given year and currency.
+  Used to populate the bar chart with one data point per month.
+  */
+  function getYearlyData(currency, year) {
+    const all = loadItems();
+    // Initialize all 12 months with zero
+    const monthly = Array(12).fill(0);
+    all.filter(i => i.date.year === year).forEach(i => {
+      const idx = i.date.month - 1;
+      monthly[idx] += convertAmount(i.sum, i.currency, currency);
+    });
+    return monthly.map((sum, idx) => ({ month: MONTHS[idx], total: Math.round(sum * 100) / 100 }));
+  }
+
+  /*
+  Returns an array of category totals for a given month and currency.
+  Used to populate the pie chart with one slice per category.
+  */
+  function getPieData(currency, year, month) {
+    const report = getReport(currency, year, month);
+    const catMap = {};
+    // Group costs by category and accumulate converted amounts
+    report.costs.forEach(c => {
+      const converted = convertAmount(c.sum, c.currency, currency);
+      catMap[c.category] = (catMap[c.category] || 0) + converted;
+    });
+    return Object.entries(catMap).map(([name, value]) => ({ name, value: Math.round(value * 100) / 100 }));
+  }
+
+  return {
+    addCost,
+    getReport,
+    getYearlyData,
+    getPieData
+  };
 }
 
-CostsDB.prototype.loadItems = function () {
-  const raw = localStorage.getItem(this.storageKey);
-  if (!raw) return [];
-  return JSON.parse(raw);
-};
-
-CostsDB.prototype.saveItems = function (items) {
-  localStorage.setItem(this.storageKey, JSON.stringify(items));
-};
-
-/*
-Adds a new cost item to the database with today's date.
-Returns the saved item's core fields.
-*/
-CostsDB.prototype.addCost = function (cost) {
-  const now = new Date();
-  // Auto-generate date and unique id for the new item
-  const newItem = {
-    ...cost,
-    date: { day: now.getDate(), month: now.getMonth() + 1, year: now.getFullYear() },
-    id: Date.now()
-  };
-  const items = this.loadItems();
-  items.push(newItem);
-  this.saveItems(items);
-  return { sum: newItem.sum, currency: newItem.currency, category: newItem.category, description: newItem.description };
-};
-
-/*
-Returns a monthly report in the requested currency.
-Filters items by year and month, converts each to the target currency,
-and calculates the total sum.
-*/
-CostsDB.prototype.getReport = function (currency, year, month) {
-  const now = new Date();
-  // Default to current month and year if not provided
-  const targetYear = year !== undefined ? year : now.getFullYear();
-  const targetMonth = month !== undefined ? month : now.getMonth() + 1;
-  const all = this.loadItems();
-  const filtered = all.filter(i => i.date.year === targetYear && i.date.month === targetMonth);
-  let totalSum = 0;
-  filtered.forEach(i => { totalSum += convertAmount(i.sum, i.currency, currency); });
-  return {
-    year: targetYear,
-    month: targetMonth,
-    costs: filtered.map(i => ({ sum: i.sum, currency: i.currency, category: i.category, description: i.description, date: { day: i.date.day } })),
-    total: { currency, sum: Math.round(totalSum * 100) / 100 }
-  };
-};
-
-/*
-Returns an array of 12 monthly totals for the given year and currency.
-Used to populate the bar chart with one data point per month.
-*/
-CostsDB.prototype.getYearlyData = function (currency, year) {
-  const all = this.loadItems();
-  // Initialize all 12 months with zero
-  const monthly = Array(12).fill(0);
-  all.filter(i => i.date.year === year).forEach(i => {
-    const idx = i.date.month - 1;
-    monthly[idx] += convertAmount(i.sum, i.currency, currency);
-  });
-  return monthly.map((sum, idx) => ({ month: MONTHS[idx], total: Math.round(sum * 100) / 100 }));
-};
-
-/*
-Returns an array of category totals for a given month and currency.
-Used to populate the pie chart with one slice per category.
-*/
-CostsDB.prototype.getPieData = function (currency, year, month) {
-  const report = this.getReport(currency, year, month);
-  const catMap = {};
-  // Group costs by category and accumulate converted amounts
-  report.costs.forEach(c => {
-    const converted = convertAmount(c.sum, c.currency, currency);
-    catMap[c.category] = (catMap[c.category] || 0) + converted;
-  });
-  return Object.entries(catMap).map(([name, value]) => ({ name, value: Math.round(value * 100) / 100 }));
-};
-
 // Shared DB instance used across the entire app
-export const costsDB = new CostsDB('costsdb', 1);
+export const costsDB = CostsDB('costsdb', 1);
